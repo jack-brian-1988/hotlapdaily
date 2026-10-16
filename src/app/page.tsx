@@ -1167,8 +1167,8 @@ export default function Home() {
               try { window.dispatchEvent(new Event('DOMContentLoaded')); } catch {}
               try { window.dispatchEvent(new Event('load')); } catch {}
             }
-            // Always reset any stale instance and re-init when landing here via SPA navigation
-            try { window.__hotlapGameInstance = undefined; } catch {}
+            // Reuse the instance created by the load event above. The page
+            // effect already handles resetting state on SPA navigation.
             if (typeof window.__hotlapInitGame === 'function') {
               window.__hotlapInitGame();
             }

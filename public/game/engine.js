@@ -541,19 +541,17 @@ class Game {
     update(timestamp) {
         const updateStart = performance.now();
 
-        if (!this.lastTimestamp) this.lastTimestamp = timestamp;
-        const deltaTime = timestamp - this.lastTimestamp;
-        this.lastTimestamp = timestamp;
-
         try {
             // Don't update if game is paused
             if (this.gamePaused) return;
+            if (!this.lapStarted) this.carController.resetClock(timestamp);
 
-            if (this.lapStarted && !this.lapCompleted) {
-                this.lapTime += deltaTime;
-
-                // Update car position through controller
-                this.carController.update();
+            // Do not discard elapsed time or teleport after a long stall.
+            if (this.lapStarted && timestamp - this.carController.simulationTime > 250) {
+                this.handleCarCrash();
+            }
+            while (this.lapStarted && !this.lapCompleted && this.carController.step(timestamp)) {
+                this.lapTime = this.carController.elapsedTime;
 
                 // Copy position from controller to car object for compatibility
                 this.car.x = this.carController.position.x;
@@ -657,16 +655,12 @@ class Game {
     }
 
     bindEvents() {
+        const pressedKeys = new Set();
+        const inputTime = (event) => {
+            const now = performance.now();
+            return event.timeStamp > 0 && event.timeStamp <= now + 1000 ? event.timeStamp : now;
+        };
         // Keyboard controls with error handling
-        // Get all left and right control elements (for both portrait and landscape modes)
-        const getLeftControls = () => document.querySelectorAll('.control-item.control-left');
-        const getRightControls = () => document.querySelectorAll('.control-item.control-right');
-        // Initial query
-        let leftControls = getLeftControls();
-        let rightControls = getRightControls();
-        // Fallback to first/last child for backwards compatibility
-        const leftControl = leftControls.length > 0 ? leftControls[0] : document.querySelector('.control-item:first-child');
-        const rightControl = rightControls.length > 0 ? rightControls[0] : document.querySelector('.control-item:last-child');
         document.addEventListener('keydown', (e) => {
             try {
                 switch (e.code) {
@@ -677,13 +671,15 @@ class Game {
                         break;
                     case 'ArrowLeft':
                     case 'KeyA':
-                        this.carController.setControls(true, false);
-                        leftControl.classList.add('pressed');
+                        e.preventDefault();
+                        pressedKeys.add(e.code);
+                        updateControls(inputTime(e));
                         break;
                     case 'ArrowRight':
                     case 'KeyD':
-                        this.carController.setControls(false, true);
-                        rightControl.classList.add('pressed');
+                        e.preventDefault();
+                        pressedKeys.add(e.code);
+                        updateControls(inputTime(e));
                         break;
                 }
             } catch (error) {
@@ -697,13 +693,15 @@ class Game {
                 switch (e.code) {
                     case 'ArrowLeft':
                     case 'KeyA':
-                        this.carController.setControls(false, this.carController.controls.right);
-                        leftControl.classList.remove('pressed');
+                        e.preventDefault();
+                        pressedKeys.delete(e.code);
+                        updateControls(inputTime(e));
                         break;
                     case 'ArrowRight':
                     case 'KeyD':
-                        this.carController.setControls(this.carController.controls.left, false);
-                        rightControl.classList.remove('pressed');
+                        e.preventDefault();
+                        pressedKeys.delete(e.code);
+                        updateControls(inputTime(e));
                         break;
                 }
             } catch (error) {
@@ -764,9 +762,9 @@ class Game {
 
         const activePointers = new Map(); // pointerId -> 'left' | 'right'
 
-        const updateControls = () => {
-            let left = false;
-            let right = false;
+        const updateControls = (timestamp = performance.now()) => {
+            let left = pressedKeys.has('ArrowLeft') || pressedKeys.has('KeyA');
+            let right = pressedKeys.has('ArrowRight') || pressedKeys.has('KeyD');
 
             // Determine desired state from active pointers
             for (const type of activePointers.values()) {
@@ -776,7 +774,7 @@ class Game {
 
             // Update game controller state
             // console.log('[Controls] Updating:', { left, right, activePointers: activePointers.size });
-            this.carController.setControls(left, right);
+            this.carController.setControls(left, right, timestamp);
 
             // Update visual state for ALL controls (portrait and landscape)
             const allLeftControls = document.querySelectorAll('.control-item.control-left');
@@ -797,12 +795,12 @@ class Game {
                 e.preventDefault();
                 activePointers.set(e.pointerId, 'left');
                 try { leftTarget.setPointerCapture(e.pointerId); } catch (e) { }
-                updateControls();
+                updateControls(inputTime(e));
             } else if (rightTarget) {
                 e.preventDefault();
                 activePointers.set(e.pointerId, 'right');
                 try { rightTarget.setPointerCapture(e.pointerId); } catch (e) { }
-                updateControls();
+                updateControls(inputTime(e));
             }
         }, { passive: false });
 
@@ -810,12 +808,25 @@ class Game {
             if (activePointers.has(e.pointerId)) {
                 e.preventDefault();
                 activePointers.delete(e.pointerId);
-                updateControls();
+                updateControls(inputTime(e));
             }
         };
 
         document.addEventListener('pointerup', handlePointerRelease);
         document.addEventListener('pointercancel', handlePointerRelease);
+        window.addEventListener('blur', () => {
+            pressedKeys.clear();
+            activePointers.clear();
+            updateControls();
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                pressedKeys.clear();
+                activePointers.clear();
+                updateControls();
+                if (this.lapStarted) this.handleCarCrash();
+            }
+        });
         // pointerleave is handled by setPointerCapture usually, but just in case:
         // If capture is lost, pointerup/cancel should fire.
     }
@@ -919,11 +930,15 @@ class Game {
         // Calculate the Y-offset (12% of canvas height) to match rendering offset
         const yOffset = this.canvas.height * 0.12;
         // Set position with the Y-offset to align with the rendered track
-        this.carController.setPosition(startCheckpoint.x, startCheckpoint.y + yOffset, (startCheckpoint.angle || 0) * Math.PI / 180);
+        // Preserve the original capped 100 ms opening turn as a fixed heading offset.
+        // Applying it here keeps idle time and the first rendered frame out of physics.
+        const openingTurn = (Number(wasPressingRight) - Number(wasPressingLeft)) * this.carController.baseTurnSpeed * 100;
+        this.carController.setPosition(startCheckpoint.x, startCheckpoint.y + yOffset, (startCheckpoint.angle || 0) * Math.PI / 180 + openingTurn);
         this.lapStarted = true;
         this.lapCompleted = false;
         this.lapTime = 0;
         this.hasLeftStartArea = false;
+        this.carController.resetClock();
         // Reset ghost lap recording
         this.ghostCurrentTrail = [];
         this._ghostLastSampleMs = 0;

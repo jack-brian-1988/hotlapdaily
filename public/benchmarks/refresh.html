@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Hotlap Daily — performance benchmark</title>
+<style>
+body { margin: 0; font: 14px system-ui; background: #f4f4f4; color: #111; }
+header { padding: 12px 20px; } button { padding: 8px 16px; }
+h1 { margin: 0; font-size: 20px; } p { margin: 6px 0; }
+iframe { display: block; width: 100%; height: 100vh; border: 0; background: white; }
+footer { padding: 12px 20px; }
+pre { white-space: pre-wrap; } table { border-collapse: collapse; }
+td, th { padding: 6px 12px; border: 1px solid #bbb; }
+</style>
+<header>
+<h1>Full-game performance</h1>
+<p>The same real track, physics, collisions, checkpoints and rendering inside the browser.
+Automated driving; restarts after each crash. Each phase has a 2 s warm-up and a 10 s measurement.
+Benchmark laps are not submitted to the leaderboard.</p>
+<button id="run">Compare 240 and 1000 steps/s</button>
+<p id="status">Preparing the game…</p>
+</header>
+<iframe id="game" src="/" title="Game under test"></iframe>
+<footer><div id="results"></div><pre id="details"></pre></footer>
+<script type="module" src="./refresh.js"></script>
+</html>
